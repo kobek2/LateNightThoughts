@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { deleteComment } from "@/lib/actions";
 
-export function RemoveCommentButton({ id, pass = "" }: { id: string; pass?: string }) {
+export function RemoveCommentButton({ id }: { id: string }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -19,7 +19,7 @@ export function RemoveCommentButton({ id, pass = "" }: { id: string; pass?: stri
           if (!confirm("Remove this comment?")) return;
           setPending(true);
           setError(null);
-          const result = await deleteComment(id, pass);
+          const result = await deleteComment(id);
           if ("error" in result) {
             setError(result.error);
             setPending(false);

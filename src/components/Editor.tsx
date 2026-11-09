@@ -10,7 +10,6 @@ import type { DraftInput, EditorPost } from "@/lib/types";
 import { BodyField } from "./BodyField";
 import { DeletePostButton } from "./DeletePostButton";
 import { RemoveCommentButton } from "./RemoveCommentButton";
-import { usePass } from "./WriteGate";
 
 type TakeDraft = { key: string; id?: string; text: string };
 type SourceDraft = { key: string; id?: string; label: string; url: string; note: string };
@@ -63,7 +62,6 @@ function GrowingTextarea({
 }
 
 export function Editor({ post, fresh = false }: { post: EditorPost | null; fresh?: boolean }) {
-  const { pass } = usePass();
   const router = useRouter();
   const [title, setTitle] = useState(post?.title ?? "");
   const [excerpt, setExcerpt] = useState(post?.excerpt ?? "");
@@ -211,10 +209,7 @@ export function Editor({ post, fresh = false }: { post: EditorPost | null; fresh
     try {
       const response = await fetch("/api/drafts", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-blog-passphrase": pass,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(current),
       });
       const result = (await response.json()) as {
@@ -262,7 +257,7 @@ export function Editor({ post, fresh = false }: { post: EditorPost | null; fresh
     return () => window.clearTimeout(handle);
     // pushDraft closes over the latest field values via snapshotRef, which is updated every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, excerpt, body, tags, takes, sources, pass]);
+  }, [title, excerpt, body, tags, takes, sources]);
 
   useEffect(() => {
     const flush = () => {
@@ -275,10 +270,7 @@ export function Editor({ post, fresh = false }: { post: EditorPost | null; fresh
       localStorage.setItem(OPEN_DRAFT_KEY, current.id);
       void fetch("/api/drafts", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-blog-passphrase": pass,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(current),
         keepalive: true,
       });
@@ -292,7 +284,7 @@ export function Editor({ post, fresh = false }: { post: EditorPost | null; fresh
       window.removeEventListener("pagehide", flush);
       document.removeEventListener("visibilitychange", onHide);
     };
-  }, [pass]);
+  }, []);
 
   function onTitleKeyDown(event: KeyboardEvent<HTMLTextAreaElement | HTMLInputElement>) {
     if (event.key === "Enter") event.preventDefault();
@@ -318,7 +310,7 @@ export function Editor({ post, fresh = false }: { post: EditorPost | null; fresh
       publishingRef.current = false;
       return;
     }
-    const result = await updatePost(saved.id, current, pass);
+    const result = await updatePost(saved.id, current);
     if ("error" in result) {
       setError(result.error);
       setPending(false);
@@ -529,7 +521,7 @@ export function Editor({ post, fresh = false }: { post: EditorPost | null; fresh
                   <span className="comment-meta"> · {formatDate(comment.createdAt)}</span>
                   <p className="comment-body">{comment.body}</p>
                 </div>
-                <RemoveCommentButton id={comment.id} pass={pass} />
+                <RemoveCommentButton id={comment.id} />
               </li>
             ))}
           </ul>

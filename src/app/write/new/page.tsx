@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Editor } from "@/components/Editor";
 import { LockButton, WriteGate } from "@/components/WriteGate";
-import { passphraseRequired } from "@/lib/auth";
+import { studioOpen } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -12,9 +12,10 @@ export default async function NewPostPage({
 }: {
   searchParams: Promise<{ fresh?: string }>;
 }) {
+  if (!(await studioOpen())) return <WriteGate />;
   const sp = await searchParams;
   return (
-    <WriteGate required={passphraseRequired()}>
+    <>
       <div className="measure">
         <p className="kicker">Studio</p>
         <div className="section-head">
@@ -23,6 +24,6 @@ export default async function NewPostPage({
         </div>
         <Editor post={null} fresh={sp.fresh === "1"} />
       </div>
-    </WriteGate>
+    </>
   );
 }

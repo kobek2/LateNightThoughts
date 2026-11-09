@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { DeletePostButton } from "@/components/DeletePostButton";
 import { LockButton, WriteGate } from "@/components/WriteGate";
-import { passphraseRequired } from "@/lib/auth";
+import { studioOpen } from "@/lib/auth";
 import { formatDate } from "@/lib/format";
 import { listEditorPosts } from "@/lib/store";
 
@@ -13,11 +13,12 @@ export const metadata: Metadata = {
   description: "Write, edit, and remove posts.",
 };
 
-export default function WritePage() {
+export default async function WritePage() {
+  if (!(await studioOpen())) return <WriteGate />;
   const posts = listEditorPosts();
 
   return (
-    <WriteGate required={passphraseRequired()}>
+    <>
       <div className="measure">
         <p className="kicker">Studio</p>
         <div className="section-head">
@@ -62,6 +63,6 @@ export default function WritePage() {
           </ul>
         )}
       </div>
-    </WriteGate>
+    </>
   );
 }

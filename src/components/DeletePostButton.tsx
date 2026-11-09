@@ -4,10 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { deletePost } from "@/lib/actions";
 import { OPEN_DRAFT_KEY, SESSION_DRAFT_KEY, draftStorageKey } from "@/lib/constants";
-import { usePass } from "./WriteGate";
 
 export function DeletePostButton({ id }: { id: string }) {
-  const { pass } = usePass();
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -22,7 +20,7 @@ export function DeletePostButton({ id }: { id: string }) {
           if (!confirm("Delete this post and its comments?")) return;
           setPending(true);
           setError(null);
-          const result = await deletePost(id, pass);
+          const result = await deletePost(id);
           if ("error" in result) {
             setError(result.error);
             setPending(false);

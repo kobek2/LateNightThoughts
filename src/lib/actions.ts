@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { isAuthorized, passphraseRequired } from "./auth";
+import { closeStudio, isAuthorized, openStudio, studioOpen } from "./auth";
 import {
   addCommentRecord,
   createPostRecord,
@@ -21,30 +21,42 @@ function refreshPost(slug: string | null) {
   if (slug) revalidatePath(`/posts/${slug}`);
 }
 
-export async function checkPassphrase(pass: string) {
-  if (!passphraseRequired()) return { ok: true as const };
+async function requireStudio() {
+  if (!(await studioOpen())) return { error: "The studio passphrase was rejected." } as const;
+  return null;
+}
+
+export async function unlockStudio(pass: string) {
   if (!isAuthorized(pass)) return { ok: false as const };
+  await openStudio();
   return { ok: true as const };
 }
 
-export async function createPost(input: PostInput, pass: string) {
-  if (!isAuthorized(pass)) return { error: "The studio passphrase was rejected." };
+export async function lockStudio() {
+  await closeStudio();
+}
+
+export async function createPost(input: PostInput) {
+  const denied = await requireStudio();
+  if (denied) return denied;
   const result = createPostRecord(input);
   if ("error" in result) return result;
   refreshPost(result.slug);
   return result;
 }
 
-export async function updatePost(id: string, input: PostInput, pass: string) {
-  if (!isAuthorized(pass)) return { error: "The studio passphrase was rejected." };
+export async function updatePost(id: string, input: PostInput) {
+  const denied = await requireStudio();
+  if (denied) return denied;
   const result = updatePostRecord(id, input);
   if ("error" in result) return result;
   refreshPost(result.slug);
   return result;
 }
 
-export async function deletePost(id: string, pass: string) {
-  if (!isAuthorized(pass)) return { error: "The studio passphrase was rejected." };
+export async function deletePost(id: string) {
+  const denied = await requireStudio();
+  if (denied) return denied;
   const result = deletePostRecord(id);
   if ("error" in result) return result;
   refreshPost(null);
@@ -72,9 +84,9 @@ export async function addComment(input: {
   return { ok: true as const };
 }
 
-export async function deleteComment(commentId: string, pass: string) {
+export async function deleteComment(commentId: string) {
   const visitorId = await getVisitorId();
-  const moderator = passphraseRequired() ? isAuthorized(pass) : true;
+  const moderator = await studioOpen();
   const result = deleteCommentRecord(commentId, visitorId, moderator);
   if ("error" in result) return result;
   refreshPost(result.slug);

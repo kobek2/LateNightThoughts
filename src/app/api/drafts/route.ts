@@ -1,12 +1,11 @@
-import { isAuthorized } from "@/lib/auth";
+import { studioOpen } from "@/lib/auth";
 import { saveDraftRecord } from "@/lib/store";
 import type { DraftInput } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  const pass = request.headers.get("x-blog-passphrase") ?? "";
-  if (!isAuthorized(pass)) {
+  if (!(await studioOpen())) {
     return Response.json({ error: "The studio passphrase was rejected." }, { status: 401 });
   }
   let input: DraftInput;
