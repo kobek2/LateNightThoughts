@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 
 export default async function WritePage() {
   if (!(await studioOpen())) return <WriteGate />;
-  const posts = listEditorPosts();
+  const posts = await listEditorPosts();
 
   return (
     <>

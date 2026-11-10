@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
   const visitorId = await getVisitorId();
-  const { featured, recent } = homePosts(visitorId);
+  const { featured, recent } = await homePosts(visitorId);
 
   return (
     <>

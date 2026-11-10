@@ -18,7 +18,7 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const post = getPostBySlug(slug, null);
+  const post = await getPostBySlug(slug, null);
   if (!post) return { title: "Not found" };
   return { title: post.title, description: post.excerpt };
 }
@@ -26,7 +26,7 @@ export async function generateMetadata({
 export default async function PostPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const visitorId = await getVisitorId();
-  const post = getPostBySlug(slug, visitorId);
+  const post = await getPostBySlug(slug, visitorId);
   if (!post) notFound();
 
   return (

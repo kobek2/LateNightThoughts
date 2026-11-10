@@ -32,8 +32,8 @@ export default async function ArchivePage({
   const parsed = Number.parseInt(sp.page ?? "1", 10);
   const requested = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
   const visitorId = await getVisitorId();
-  const { posts, total, page, pages } = queryPosts({ q, tag, page: requested, visitorId });
-  const tags = allTags();
+  const { posts, total, page, pages } = await queryPosts({ q, tag, page: requested, visitorId });
+  const tags = await allTags();
 
   return (
     <div>

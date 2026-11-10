@@ -39,7 +39,7 @@ export async function lockStudio() {
 export async function createPost(input: PostInput) {
   const denied = await requireStudio();
   if (denied) return denied;
-  const result = createPostRecord(input);
+  const result = await createPostRecord(input);
   if ("error" in result) return result;
   refreshPost(result.slug);
   return result;
@@ -48,7 +48,7 @@ export async function createPost(input: PostInput) {
 export async function updatePost(id: string, input: PostInput) {
   const denied = await requireStudio();
   if (denied) return denied;
-  const result = updatePostRecord(id, input);
+  const result = await updatePostRecord(id, input);
   if ("error" in result) return result;
   refreshPost(result.slug);
   return result;
@@ -57,7 +57,7 @@ export async function updatePost(id: string, input: PostInput) {
 export async function deletePost(id: string) {
   const denied = await requireStudio();
   if (denied) return denied;
-  const result = deletePostRecord(id);
+  const result = await deletePostRecord(id);
   if ("error" in result) return result;
   refreshPost(null);
   return result;
@@ -72,7 +72,7 @@ export async function addComment(input: {
 }) {
   if (input.company.trim()) return { ok: true as const };
   const visitorId = await ensureVisitorId();
-  const result = addCommentRecord({
+  const result = await addCommentRecord({
     postId: input.postId,
     takeId: input.takeId,
     authorName: input.authorName,
@@ -87,7 +87,7 @@ export async function addComment(input: {
 export async function deleteComment(commentId: string) {
   const visitorId = await getVisitorId();
   const moderator = await studioOpen();
-  const result = deleteCommentRecord(commentId, visitorId, moderator);
+  const result = await deleteCommentRecord(commentId, visitorId, moderator);
   if ("error" in result) return result;
   refreshPost(result.slug);
   return { ok: true as const };
@@ -98,7 +98,7 @@ export async function setStance(takeId: string, stance: Stance) {
     return { error: "Choose agree or disagree." };
   }
   const visitorId = await ensureVisitorId();
-  const result = setStanceRecord(takeId, visitorId, stance);
+  const result = await setStanceRecord(takeId, visitorId, stance);
   if ("error" in result) return result;
   refreshPost(result.slug);
   return {

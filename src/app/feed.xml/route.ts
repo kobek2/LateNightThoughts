@@ -4,8 +4,8 @@ import { listFeedPosts } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
-export function GET() {
-  const posts = listFeedPosts();
+export async function GET() {
+  const posts = await listFeedPosts();
   const items = posts
     .map(
       (post) => `    <item>

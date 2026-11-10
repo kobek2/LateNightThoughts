@@ -13,7 +13,7 @@ export const metadata: Metadata = { title: "Edit post" };
 export default async function EditPostPage({ params }: { params: Promise<{ id: string }> }) {
   if (!(await studioOpen())) return <WriteGate />;
   const { id } = await params;
-  const post = getEditorPost(id);
+  const post = await getEditorPost(id);
   if (!post) notFound();
 
   return (

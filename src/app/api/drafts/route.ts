@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   if (!input || typeof input.id !== "string" || !Array.isArray(input.takes)) {
     return Response.json({ error: "Draft could not be read." }, { status: 400 });
   }
-  const result = saveDraftRecord({
+  const result = await saveDraftRecord({
     id: input.id,
     title: typeof input.title === "string" ? input.title : "",
     excerpt: typeof input.excerpt === "string" ? input.excerpt : "",

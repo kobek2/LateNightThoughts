@@ -1,6 +1,13 @@
 import "server-only";
 import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync } from "fs";
 import path from "path";
+import {
+  activityRemote,
+  isActivityConflict,
+  readRemoteActivity,
+  StoreWriteError,
+  writeRemoteActivity,
+} from "./activity";
 import { plainExcerpt, readingMinutes } from "./format";
 import { seedStore } from "./seed";
 import type {
@@ -22,18 +29,47 @@ import type {
 const dataDir = path.join(process.cwd(), "data");
 const dataFile = path.join(dataDir, "store.json");
 
-function persist(store: StoreData) {
-  mkdirSync(dataDir, { recursive: true });
-  const tmp = `${dataFile}.tmp`;
-  writeFileSync(tmp, JSON.stringify(store, null, 2));
-  renameSync(tmp, dataFile);
+type LoadedStore = StoreData & {
+  activityEtag: string | null;
+  activityUnreadable: boolean;
+};
+
+function fileRecord(store: StoreData): StoreData {
+  return {
+    posts: store.posts,
+    comments: store.comments,
+    reactions: store.reactions,
+  };
 }
 
-function load(): StoreData {
+function writeFileStore(store: StoreData, purpose: "posts" | "activity") {
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    const tmp = `${dataFile}.tmp`;
+    writeFileSync(tmp, JSON.stringify(fileRecord(store), null, 2));
+    renameSync(tmp, dataFile);
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? String(error.code) : "";
+    if (process.env.VERCEL || code === "EROFS" || code === "EACCES" || code === "EPERM") {
+      throw new StoreWriteError(
+        purpose === "posts"
+          ? "Posts can only be published from your computer."
+          : "Comments could not be saved on the live site.",
+      );
+    }
+    throw error;
+  }
+}
+
+function readFileStore(): StoreData {
   mkdirSync(dataDir, { recursive: true });
   if (!existsSync(dataFile)) {
     const seeded = seedStore();
-    persist(seeded);
+    try {
+      writeFileStore(seeded, "posts");
+    } catch (error) {
+      if (!(error instanceof StoreWriteError)) throw error;
+    }
     return seeded;
   }
   try {
@@ -52,6 +88,67 @@ function load(): StoreData {
     if (error instanceof SyntaxError) {
       throw new Error("Blog data could not be read. Check data/store.json.");
     }
+    throw error;
+  }
+}
+
+async function load(): Promise<LoadedStore> {
+  const file = readFileStore();
+  if (!activityRemote()) {
+    return { ...file, activityEtag: null, activityUnreadable: false };
+  }
+  try {
+    const remote = await readRemoteActivity();
+    if (!remote) return { ...file, activityEtag: null, activityUnreadable: false };
+    return {
+      posts: file.posts,
+      comments: remote.comments,
+      reactions: remote.reactions,
+      activityEtag: remote.etag,
+      activityUnreadable: false,
+    };
+  } catch {
+    return { ...file, activityEtag: null, activityUnreadable: true };
+  }
+}
+
+async function saveActivity(store: LoadedStore) {
+  if (!activityRemote()) {
+    writeFileStore(store, "activity");
+    return;
+  }
+  if (store.activityUnreadable) {
+    throw new StoreWriteError("Comments could not be saved on the live site.");
+  }
+  await writeRemoteActivity(
+    { comments: store.comments, reactions: store.reactions },
+    store.activityEtag,
+  );
+}
+
+async function withActivityRetry<T>(
+  run: (store: LoadedStore) => Promise<{ error: string } | T>,
+): Promise<{ error: string } | T> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const store = await load();
+    try {
+      return await run(store);
+    } catch (error) {
+      if (error instanceof StoreWriteError) return { error: error.message };
+      if (isActivityConflict(error) && attempt < 2) continue;
+      if (isActivityConflict(error)) return { error: "That could not be saved. Try again." };
+      throw error;
+    }
+  }
+  return { error: "That could not be saved. Try again." };
+}
+
+function savePosts(store: StoreData): { error: string } | null {
+  try {
+    writeFileStore(store, "posts");
+    return null;
+  } catch (error) {
+    if (error instanceof StoreWriteError) return { error: error.message };
     throw error;
   }
 }
@@ -280,8 +377,8 @@ function validate(input: PostInput, existing: Take[]): { error: string } | {
   return { title, excerpt, body, tags: tags.tags, takes: takes.takes, sources: sources.sources };
 }
 
-export function homePosts(visitorId: string | null) {
-  const store = load();
+export async function homePosts(visitorId: string | null) {
+  const store = await load();
   const posts = store.posts
     .filter(isPublic)
     .slice()
@@ -290,7 +387,7 @@ export function homePosts(visitorId: string | null) {
   return { featured: posts[0] ?? null, recent: posts.slice(1, 6) };
 }
 
-export function queryPosts(options: {
+export async function queryPosts(options: {
   q?: string;
   tag?: string;
   page?: number;
@@ -298,7 +395,7 @@ export function queryPosts(options: {
   pageSize?: number;
 }) {
   const pageSize = options.pageSize ?? 8;
-  const store = load();
+  const store = await load();
   let posts = store.posts.filter(isPublic).slice().sort(byNewest);
   if (options.tag) {
     const tag = options.tag.toLowerCase();
@@ -332,8 +429,8 @@ export function queryPosts(options: {
   };
 }
 
-export function allTags() {
-  const store = load();
+export async function allTags() {
+  const store = await load();
   const counts = new Map<string, { tag: string; count: number }>();
   for (const post of store.posts.filter(isPublic)) {
     for (const tag of post.tags) {
@@ -346,15 +443,15 @@ export function allTags() {
   return [...counts.values()].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
 }
 
-export function getPostBySlug(slug: string, visitorId: string | null) {
-  const store = load();
+export async function getPostBySlug(slug: string, visitorId: string | null) {
+  const store = await load();
   const post = store.posts.find((item) => item.slug === slug);
   if (!post || !isPublic(post)) return null;
   return decorate(post, store, visitorId);
 }
 
-export function listEditorPosts(): PostSummary[] {
-  const store = load();
+export async function listEditorPosts(): Promise<PostSummary[]> {
+  const store = await load();
   return store.posts
     .slice()
     .sort((a, b) => {
@@ -372,8 +469,8 @@ export function listEditorPosts(): PostSummary[] {
     }));
 }
 
-export function getEditorPost(id: string): EditorPost | null {
-  const store = load();
+export async function getEditorPost(id: string): Promise<EditorPost | null> {
+  const store = await load();
   const post = store.posts.find((item) => item.id === id);
   if (!post) return null;
   return {
@@ -399,8 +496,8 @@ export function getEditorPost(id: string): EditorPost | null {
   };
 }
 
-export function listFeedPosts() {
-  const store = load();
+export async function listFeedPosts() {
+  const store = await load();
   return store.posts
     .filter(isPublic)
     .slice()
@@ -414,8 +511,8 @@ export function listFeedPosts() {
     }));
 }
 
-export function createPostRecord(input: PostInput): { error: string } | { slug: string } {
-  const store = load();
+export async function createPostRecord(input: PostInput): Promise<{ error: string } | { slug: string }> {
+  const store = await load();
   const validated = validate(input, []);
   if ("error" in validated) return validated;
   const now = new Date().toISOString();
@@ -433,12 +530,16 @@ export function createPostRecord(input: PostInput): { error: string } | { slug: 
     updatedAt: now,
   };
   store.posts.push(post);
-  persist(store);
+  const failed = savePosts(store);
+  if (failed) return failed;
   return { slug: post.slug };
 }
 
-export function updatePostRecord(id: string, input: PostInput): { error: string } | { slug: string } {
-  const store = load();
+export async function updatePostRecord(
+  id: string,
+  input: PostInput,
+): Promise<{ error: string } | { slug: string }> {
+  const store = await load();
   const post = store.posts.find((item) => item.id === id);
   if (!post) return { error: "That post no longer exists." };
   const validated = validate(input, post.takes);
@@ -460,17 +561,20 @@ export function updatePostRecord(id: string, input: PostInput): { error: string 
       comment.takeId = null;
     }
   }
-  persist(store);
+  const failed = savePosts(store);
+  if (failed) return failed;
   return { slug: post.slug };
 }
 
-export function saveDraftRecord(
+export async function saveDraftRecord(
   input: DraftInput,
-): { error: string } | { id: string; slug: string; status: StoredPost["status"]; updatedAt: string; skipped?: boolean } {
+): Promise<
+  { error: string } | { id: string; slug: string; status: StoredPost["status"]; updatedAt: string; skipped?: boolean }
+> {
   if (!input.id || !/^[\w-]{1,80}$/.test(input.id)) {
     return { error: "Draft could not be saved." };
   }
-  const store = load();
+  const store = await load();
   const title = cleanLine(input.title).replace(/\s+/g, " ").slice(0, 200);
   const excerpt = input.excerpt.replace(/\r\n/g, "\n").replace(/[^\S\n]+/g, " ").trim().slice(0, 500);
   const body = input.body.replace(/\r\n/g, "\n").slice(0, 40000);
@@ -510,7 +614,8 @@ export function saveDraftRecord(
         comment.takeId = null;
       }
     }
-    persist(store);
+    const failed = savePosts(store);
+    if (failed) return failed;
     return { id: existing.id, slug: existing.slug, status: existing.status, updatedAt: now };
   }
   const post: StoredPost = {
@@ -527,19 +632,21 @@ export function saveDraftRecord(
     updatedAt: now,
   };
   store.posts.push(post);
-  persist(store);
+  const failed = savePosts(store);
+  if (failed) return failed;
   return { id: post.id, slug: post.slug, status: post.status, updatedAt: now };
 }
 
-export function deletePostRecord(id: string): { error: string } | { ok: true } {
-  const store = load();
+export async function deletePostRecord(id: string): Promise<{ error: string } | { ok: true }> {
+  const store = await load();
   const post = store.posts.find((item) => item.id === id);
   if (!post) return { error: "That post no longer exists." };
   const takeIds = new Set(post.takes.map((take) => take.id));
   store.posts = store.posts.filter((item) => item.id !== id);
   store.comments = store.comments.filter((comment) => comment.postId !== id);
   store.reactions = store.reactions.filter((reaction) => !takeIds.has(reaction.takeId));
-  persist(store);
+  const failed = savePosts(store);
+  if (failed) return failed;
   return { ok: true };
 }
 
@@ -549,80 +656,83 @@ export function addCommentRecord(input: {
   authorName: string;
   body: string;
   visitorId: string;
-}): { error: string } | { ok: true; slug: string } {
-  const store = load();
-  const post = store.posts.find((item) => item.id === input.postId);
-  if (!post) return { error: "That post no longer exists." };
-  const name = cleanLine(input.authorName).replace(/\s+/g, " ").slice(0, 40) || "Reader";
-  const body = input.body.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim();
-  if (!body) return { error: "Write a comment before posting it." };
-  if (body.length > 2000) return { error: "Keep the comment under 2,000 characters." };
-  if (store.comments.filter((comment) => comment.postId === post.id).length >= 500) {
-    return { error: "This post is not accepting more comments." };
-  }
-  const latest = store.comments
-    .filter((comment) => comment.visitorId === input.visitorId)
-    .sort(byNewest)[0];
-  if (latest && Date.now() - new Date(latest.createdAt).getTime() < 15_000) {
-    return { error: "Wait a few seconds before posting another comment." };
-  }
-  const takeId = input.takeId && post.takes.some((take) => take.id === input.takeId) ? input.takeId : null;
-  store.comments.push({
-    id: crypto.randomUUID(),
-    postId: post.id,
-    takeId,
-    authorName: name,
-    body,
-    createdAt: new Date().toISOString(),
-    visitorId: input.visitorId,
+}): Promise<{ error: string } | { ok: true; slug: string }> {
+  return withActivityRetry(async (store) => {
+    const post = store.posts.find((item) => item.id === input.postId);
+    if (!post) return { error: "That post no longer exists." };
+    const name = cleanLine(input.authorName).replace(/\s+/g, " ").slice(0, 40) || "Reader";
+    const body = input.body.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim();
+    if (!body) return { error: "Write a comment before posting it." };
+    if (body.length > 2000) return { error: "Keep the comment under 2,000 characters." };
+    if (store.comments.filter((comment) => comment.postId === post.id).length >= 500) {
+      return { error: "This post is not accepting more comments." };
+    }
+    const latest = store.comments
+      .filter((comment) => comment.visitorId === input.visitorId)
+      .sort(byNewest)[0];
+    if (latest && Date.now() - new Date(latest.createdAt).getTime() < 15_000) {
+      return { error: "Wait a few seconds before posting another comment." };
+    }
+    const takeId = input.takeId && post.takes.some((take) => take.id === input.takeId) ? input.takeId : null;
+    store.comments.push({
+      id: crypto.randomUUID(),
+      postId: post.id,
+      takeId,
+      authorName: name,
+      body,
+      createdAt: new Date().toISOString(),
+      visitorId: input.visitorId,
+    });
+    await saveActivity(store);
+    return { ok: true as const, slug: post.slug };
   });
-  persist(store);
-  return { ok: true, slug: post.slug };
 }
 
 export function deleteCommentRecord(
   commentId: string,
   visitorId: string | null,
   moderator: boolean,
-): { error: string } | { ok: true; slug: string | null } {
-  const store = load();
-  const comment = store.comments.find((item) => item.id === commentId);
-  if (!comment) return { error: "That comment is already gone." };
-  const mine = Boolean(visitorId && comment.visitorId === visitorId);
-  if (!mine && !moderator) return { error: "You can only remove your own comments." };
-  store.comments = store.comments.filter((item) => item.id !== commentId);
-  persist(store);
-  const post = store.posts.find((item) => item.id === comment.postId);
-  return { ok: true, slug: post?.slug ?? null };
+): Promise<{ error: string } | { ok: true; slug: string | null }> {
+  return withActivityRetry(async (store) => {
+    const comment = store.comments.find((item) => item.id === commentId);
+    if (!comment) return { error: "That comment is already gone." };
+    const mine = Boolean(visitorId && comment.visitorId === visitorId);
+    if (!mine && !moderator) return { error: "You can only remove your own comments." };
+    store.comments = store.comments.filter((item) => item.id !== commentId);
+    await saveActivity(store);
+    const post = store.posts.find((item) => item.id === comment.postId);
+    return { ok: true as const, slug: post?.slug ?? null };
+  });
 }
 
 export function setStanceRecord(
   takeId: string,
   visitorId: string,
   stance: Stance,
-): { error: string } | { stance: Stance | null; agree: number; disagree: number; slug: string } {
-  const store = load();
-  const post = store.posts.find((item) => item.takes.some((take) => take.id === takeId));
-  if (!post) return { error: "That take no longer exists." };
-  const existing = store.reactions.find(
-    (reaction) => reaction.takeId === takeId && reaction.visitorId === visitorId,
-  );
-  if (existing && existing.stance === stance) {
-    store.reactions = store.reactions.filter(
-      (reaction) => !(reaction.takeId === takeId && reaction.visitorId === visitorId),
+): Promise<{ error: string } | { stance: Stance | null; agree: number; disagree: number; slug: string }> {
+  return withActivityRetry(async (store) => {
+    const post = store.posts.find((item) => item.takes.some((take) => take.id === takeId));
+    if (!post) return { error: "That take no longer exists." };
+    const existing = store.reactions.find(
+      (reaction) => reaction.takeId === takeId && reaction.visitorId === visitorId,
     );
-  } else if (existing) {
-    existing.stance = stance;
-  } else {
-    store.reactions.push({ takeId, visitorId, stance });
-  }
-  persist(store);
-  const related = store.reactions.filter((reaction) => reaction.takeId === takeId);
-  const mine = related.find((reaction) => reaction.visitorId === visitorId);
-  return {
-    stance: mine?.stance ?? null,
-    agree: related.filter((reaction) => reaction.stance === "agree").length,
-    disagree: related.filter((reaction) => reaction.stance === "disagree").length,
-    slug: post.slug,
-  };
+    if (existing && existing.stance === stance) {
+      store.reactions = store.reactions.filter(
+        (reaction) => !(reaction.takeId === takeId && reaction.visitorId === visitorId),
+      );
+    } else if (existing) {
+      existing.stance = stance;
+    } else {
+      store.reactions.push({ takeId, visitorId, stance });
+    }
+    await saveActivity(store);
+    const related = store.reactions.filter((reaction) => reaction.takeId === takeId);
+    const mine = related.find((reaction) => reaction.visitorId === visitorId);
+    return {
+      stance: mine?.stance ?? null,
+      agree: related.filter((reaction) => reaction.stance === "agree").length,
+      disagree: related.filter((reaction) => reaction.stance === "disagree").length,
+      slug: post.slug,
+    };
+  });
 }
